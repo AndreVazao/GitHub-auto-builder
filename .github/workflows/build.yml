@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch: # Permite executar manualmente
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,16 +13,19 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --legacy-peer-deps
+          # O --legacy-peer-deps ajuda a resolver conflitos de dependências
 
       - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
@@ -33,15 +36,41 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
+      - name: Create eas.json (se não existir)
+        run: |
+          if [ ! -f eas.json ]; then
+            echo '{
+              "cli": {
+                "version": ">= 3.0.0"
+              },
+              "build": {
+                "preview": {
+                  "android": {
+                    "buildType": "apk"
+                  }
+                }
+              },
+              "submit": {
+                "production": {}
+              }
+            }' > eas.json
+          fi
+
       - name: Build Android APK
-        run: eas build -p android --profile preview --non-interactive
+        run: eas build -p android --profile preview --non-interactive --local
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Find APK file
+        id: find-apk
+        run: |
+          APK_PATH=$(find . -name "*.apk" | head -1)
+          echo "apk-path=$APK_PATH" >> $GITHUB_OUTPUT
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: |
-            *.apk
-            **/*.apk
+          name: github-auto-builder-app
+          path: ${{ steps.find-apk.outputs.apk-path }}
+          if-no-files-found: error
+          retention-days: 90
