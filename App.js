@@ -1,498 +1,453 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  SafeAreaView,
-  StyleSheet,
-  View,
-  Text,
-  Button,
   Alert,
-  ScrollView,
   Modal,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
   TextInput,
-  TouchableOpacity
+  TouchableOpacity,
+  View
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
-import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
-import FloatingButton from './src/components/FloatingButton';
+import { Base64 } from 'js-base64';
 import { Octokit } from '@octokit/rest';
+
+import FloatingButton from './src/components/FloatingButton';
 import { PathValidator } from './src/services/PathValidator';
 import { ProjectStateManager } from './src/services/ProjectStateManager';
 
+const STORAGE_KEYS = {
+  token: 'github_token',
+  user: 'github_user',
+  repo: 'current_repo'
+};
+
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [githubToken, setGithubToken] = useState(null);
+  const [githubToken, setGithubToken] = useState('');
   const [githubUser, setGithubUser] = useState(null);
   const [currentRepo, setCurrentRepo] = useState(null);
-  const [isCapturing, setIsCapturing] = useState(false);
   const [logs, setLogs] = useState([]);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [pendingOperation, setPendingOperation] = useState(null);
-  const [projectState, setProjectState] = useState(null);
+  const [isBusy, setIsBusy] = useState(false);
 
-  // Descobrir paths similares quando detecta erro
-  const findSimilarPaths = (wrongPath, existingPaths) => {
-    return existingPaths.filter(path => {
-      const similarity = calculateSimilarity(wrongPath, path);
-      return similarity > 0.7;
-    });
-  };
+  const [tokenModalVisible, setTokenModalVisible] = useState(false);
+  const [repoModalVisible, setRepoModalVisible] = useState(false);
 
-  const calculateSimilarity = (str1, str2) => {
-    const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
-    
-    if (longer.length === 0) return 1.0;
-    
-    const costs = [];
-    for (let i = 0; i <= longer.length; i++) {
-      let lastValue = i;
-      for (let j = 0; j <= shorter.length; j++) {
-        if (i === 0) {
-          costs[j] = j;
-        } else if (j > 0) {
-          let newValue = costs[j - 1];
-          if (longer.charAt(i - 1) !== shorter.charAt(j - 1)) {
-            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
-          }
-          costs[j - 1] = lastValue;
-          lastValue = newValue;
-        }
-      }
-      if (i > 0) costs[shorter.length] = lastValue;
-    }
-    
-    return (longer.length - costs[shorter.length]) / longer.length;
-  };
+  const [tokenInput, setTokenInput] = useState('');
+  const [repoInput, setRepoInput] = useState('');
+  const [createRepoIfMissing, setCreateRepoIfMissing] = useState(true);
+
+  const [stateManager] = useState(() => new ProjectStateManager());
+
+  const isAuthenticated = Boolean(githubToken && githubUser);
+
+  const octokit = useMemo(() => {
+    if (!githubToken) return null;
+    return new Octokit({ auth: githubToken });
+  }, [githubToken]);
 
   useEffect(() => {
-    loadStoredToken();
+    bootstrap();
   }, []);
 
-  const loadStoredToken = async () => {
+  async function bootstrap() {
     try {
-      const token = await AsyncStorage.getItem('github_token');
-      const user = await AsyncStorage.getItem('github_user');
-      if (token) {
-        setGithubToken(token);
-        setGithubUser(JSON.parse(user));
-        setIsAuthenticated(true);
-        addLog('✅ Conectado ao GitHub');
-        
-        // Inicializar gerenciador de estado do projeto
-        setProjectState(new ProjectStateManager());
+      const [storedToken, storedUser, storedRepo] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.token),
+        AsyncStorage.getItem(STORAGE_KEYS.user),
+        AsyncStorage.getItem(STORAGE_KEYS.repo)
+      ]);
+
+      if (storedToken && storedUser) {
+        setGithubToken(storedToken);
+        setGithubUser(JSON.parse(storedUser));
+        addLog(`✅ Sessão restaurada: @${JSON.parse(storedUser).login}`);
+      }
+
+      if (storedRepo) {
+        setCurrentRepo(JSON.parse(storedRepo));
+        addLog(`✅ Repositório restaurado: ${JSON.parse(storedRepo).full_name}`);
       }
     } catch (error) {
-      addLog(`❌ Erro ao carregar token: ${error.message}`);
+      addLog(`❌ Falha ao restaurar sessão: ${error.message}`);
     }
-  };
+  }
 
-  const addLog = (message) => {
-    setLogs(prev => [...prev, { 
-      id: Date.now() + Math.random(),
-      text: message,
-      timestamp: new Date().toLocaleTimeString() 
-    }]);
-  };
+  function addLog(message) {
+    setLogs((prev) => [
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        message
+      },
+      ...prev
+    ]);
+  }
 
-  const handleCapture = async () => {
-    try {
-      setIsCapturing(true);
-      addLog('📋 Acessando área de transferência...');
+  async function handleSaveToken() {
+    const token = tokenInput.trim();
 
-      // 1. Pegar texto da área de transferência
-      const text = await Clipboard.getStringAsync();
-      
-      if (!text) {
-        addLog('⚠️ Área de transferência vazia');
-        Alert.alert('Aviso', 'Copie o código da IA primeiro!');
-        return;
-      }
-
-      addLog('✅ Texto capturado da área de transferência');
-
-      // 2. Extrair paths do texto
-      const paths = PathValidator.extractPathsFromText(text);
-      
-      if (paths.length === 0) {
-        addLog('⚠️ Nenhum caminho de arquivo encontrado');
-        Alert.alert('Aviso', 'Nenhum comando // FILE: encontrado no texto');
-        return;
-      }
-
-      addLog(`📁 Encontrados ${paths.length} arquivos: ${paths.map(p => p.fullPath).join(', ')}`);
-
-      // 3. Extrair blocos de código
-      const codeBlocks = PathValidator.extractCodeBlocks(text);
-      
-      if (codeBlocks.length === 0) {
-        addLog('⚠️ Nenhum bloco de código encontrado');
-        return;
-      }
-
-      addLog(`📦 Encontrados ${codeBlocks.length} blocos de código`);
-
-      // 4. Validar paths
-      const validationResults = [];
-      for (const path of paths) {
-        const validation = PathValidator.validatePathSyntax(path.fullPath);
-        validationResults.push({
-          path: path.fullPath,
-          ...validation
-        });
-
-        if (!validation.isValid) {
-          addLog(`❌ Path inválido: ${path.fullPath} - ${validation.errors.join(', ')}`);
-        } else if (validation.warnings.length > 0) {
-          addLog(`⚠️ Path com avisos: ${path.fullPath} - ${validation.warnings.join(', ')}`);
-        } else {
-          addLog(`✅ Path válido: ${path.fullPath}`);
-        }
-      }
-
-      // 5. Verificar se tem erros
-      const hasErrors = validationResults.some(r => !r.isValid);
-      
-      if (hasErrors) {
-        // Mostrar modal para correção
-        setPendingOperation({
-          type: 'validation_errors',
-          paths: validationResults,
-          codeBlocks,
-          originalText: text
-        });
-        setModalVisible(true);
-        return;
-      }
-
-      // 6. Se não tem repositório, perguntar para criar
-      if (!currentRepo) {
-        setPendingOperation({
-          type: 'new_repo',
-          paths: validationResults,
-          codeBlocks
-        });
-        setModalVisible(true);
-        return;
-      }
-
-      // 7. Fazer commit diretamente
-      await commitFiles(codeBlocks, validationResults);
-
-    } catch (error) {
-      addLog(`❌ Erro: ${error.message}`);
-      Alert.alert('Erro', error.message);
-    } finally {
-      setIsCapturing(false);
-    }
-  };
-
-  const commitFiles = async (codeBlocks, validationResults, repo = currentRepo) => {
-    if (!repo) {
-      addLog('❌ Nenhum repositório selecionado');
+    if (!token) {
+      Alert.alert('Token em falta', 'Cole um token pessoal do GitHub.');
       return;
     }
 
-    addLog(`📤 Enviando para GitHub: ${repo.full_name}`);
-
-    const octokit = new Octokit({ auth: githubToken });
-
-    for (let i = 0; i < codeBlocks.length; i++) {
-      const block = codeBlocks[i];
-      const pathInfo = validationResults[i] || { path: 'unknown' };
-      
-      try {
-        addLog(`📄 Commitando: ${pathInfo.path}`);
-
-        // Verificar se arquivo já existe
-        let sha = null;
-        try {
-          const { data } = await octokit.repos.getContent({
-            owner: githubUser.login,
-            repo: repo.name,
-            path: pathInfo.path,
-          });
-          sha = data.sha;
-          addLog(`  ↳ Arquivo existente, será atualizado`);
-        } catch (error) {
-          addLog(`  ↳ Novo arquivo será criado`);
-        }
-
-        // Criar ou atualizar arquivo
-        await octokit.repos.createOrUpdateFileContents({
-          owner: githubUser.login,
-          repo: repo.name,
-          path: pathInfo.path,
-          message: `Add/Update ${pathInfo.path} via Auto-Builder`,
-          content: Buffer.from(block.code).toString('base64'),
-          sha,
-        });
-
-        addLog(`✅ ${pathInfo.path} commitado com sucesso`);
-
-        // Registrar no estado do projeto
-        if (projectState) {
-          projectState.registerPath(pathInfo.path, block.code);
-        }
-
-      } catch (error) {
-        addLog(`❌ Erro em ${pathInfo.path}: ${error.message}`);
-      }
-    }
-
-    addLog('🎉 Todos os arquivos processados!');
-    Alert.alert('Sucesso', 'Arquivos enviados para o GitHub!');
-  };
-
-  const createNewRepo = async (repoName) => {
     try {
-      addLog(`📁 Criando repositório: ${repoName}`);
+      setIsBusy(true);
+      addLog('🔐 Validando token GitHub...');
 
-      const octokit = new Octokit({ auth: githubToken });
-      
-      const { data } = await octokit.repos.createForAuthenticatedUser({
-        name: repoName,
-        description: 'Criado via GitHub Auto-Builder',
-        private: false,
-        auto_init: true,
-      });
+      const client = new Octokit({ auth: token });
+      const { data: user } = await client.users.getAuthenticated();
 
-      setCurrentRepo(data);
-      addLog(`✅ Repositório criado: ${data.html_url}`);
+      await AsyncStorage.multiSet([
+        [STORAGE_KEYS.token, token],
+        [STORAGE_KEYS.user, JSON.stringify(user)]
+      ]);
 
-      return data;
-
-    } catch (error) {
-      addLog(`❌ Erro ao criar repositório: ${error.message}`);
-      throw error;
-    }
-  };
-
-  const handleAuth = async () => {
-    try {
-      // Configuração do OAuth - você precisa criar um App no GitHub
-      const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
-      
-      // IMPORTANTE: Substitua pelo seu Client ID após criar o app no GitHub
-      const clientId = 'SEU_CLIENT_ID_AQUI'; 
-      
-      const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo%20user`;
-      
-      addLog('🔑 Abrindo navegador para autenticação...');
-      
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
-      
-      if (result.type === 'success') {
-        // Extrair código da URL
-        const params = new URLSearchParams(result.url.split('?')[1]);
-        const code = params.get('code');
-        
-        // Aqui você precisaria de um backend para trocar code por token
-        // Para teste inicial, vamos usar um token personal
-        // MAS PARA FUNCIONAR, você precisa:
-        // Opção 1: Usar um backend simples (recomendo)
-        // Opção 2: Gerar um token pessoal no GitHub e colar manualmente
-        
-        Alert.alert(
-          'Token necessário',
-          'Cole seu token pessoal do GitHub (Settings -> Developer settings -> Personal access tokens)',
-          [
-            { text: 'Cancelar', style: 'cancel' },
-            { 
-              text: 'OK',
-              onPress: async () => {
-                // Implementar input de token manual
-                promptForToken();
-              }
-            }
-          ]
-        );
-      }
-    } catch (error) {
-      addLog(`❌ Erro na autenticação: ${error.message}`);
-    }
-  };
-
-  const promptForToken = () => {
-    Alert.prompt(
-      'Token GitHub',
-      'Cole seu token pessoal:',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Salvar',
-          onPress: async (token) => {
-            if (token) {
-              await saveToken(token);
-            }
-          }
-        }
-      ],
-      'plain-text'
-    );
-  };
-
-  const saveToken = async (token) => {
-    try {
-      const octokit = new Octokit({ auth: token });
-      const { data } = await octokit.users.getAuthenticated();
-      
-      await AsyncStorage.setItem('github_token', token);
-      await AsyncStorage.setItem('github_user', JSON.stringify(data));
-      
       setGithubToken(token);
-      setGithubUser(data);
-      setIsAuthenticated(true);
-      
-      addLog(`✅ Bem-vindo, ${data.login}!`);
-      
+      setGithubUser(user);
+      setTokenInput('');
+      setTokenModalVisible(false);
+
+      addLog(`✅ Autenticado como @${user.login}`);
     } catch (error) {
       addLog(`❌ Token inválido: ${error.message}`);
+      Alert.alert('Erro', `Token inválido: ${error.message}`);
+    } finally {
+      setIsBusy(false);
     }
-  };
+  }
 
-  const handleLogout = async () => {
-    await AsyncStorage.removeItem('github_token');
-    await AsyncStorage.removeItem('github_user');
-    setIsAuthenticated(false);
-    setGithubToken(null);
+  async function handleLogout() {
+    await AsyncStorage.multiRemove([
+      STORAGE_KEYS.token,
+      STORAGE_KEYS.user,
+      STORAGE_KEYS.repo
+    ]);
+
+    setGithubToken('');
     setGithubUser(null);
     setCurrentRepo(null);
-    addLog('👋 Desconectado do GitHub');
-  };
+
+    addLog('🚪 Sessão removida');
+  }
+
+  function parseRepoInput(value) {
+    const clean = String(value || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
+    const parts = clean.split('/').filter(Boolean);
+
+    if (parts.length === 1 && githubUser?.login) {
+      return { owner: githubUser.login, repo: parts[0] };
+    }
+
+    if (parts.length >= 2) {
+      return { owner: parts[0], repo: parts[1] };
+    }
+
+    return null;
+  }
+
+  async function ensureRepoExists(owner, repo) {
+    try {
+      const { data } = await octokit.repos.get({ owner, repo });
+      return data;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+
+      if (!createRepoIfMissing) {
+        throw new Error(`Repositório ${owner}/${repo} não existe`);
+      }
+
+      if (!githubUser || owner !== githubUser.login) {
+        throw new Error('Só consigo criar automaticamente repositórios na tua conta autenticada');
+      }
+
+      addLog(`📦 Repositório ${owner}/${repo} não existe. A criar...`);
+
+      const { data } = await octokit.repos.createForAuthenticatedUser({
+        name: repo,
+        private: false,
+        auto_init: true,
+        description: 'Criado via GitHub Auto Builder'
+      });
+
+      return data;
+    }
+  }
+
+  async function handleSaveRepo() {
+    if (!octokit || !githubUser) {
+      Alert.alert('Erro', 'Autentica primeiro no GitHub.');
+      return;
+    }
+
+    const parsed = parseRepoInput(repoInput);
+    if (!parsed) {
+      Alert.alert('Repo inválida', 'Usa "nome-da-repo" ou "owner/nome-da-repo".');
+      return;
+    }
+
+    try {
+      setIsBusy(true);
+      addLog(`🔎 A validar repositório ${parsed.owner}/${parsed.repo}...`);
+
+      const repo = await ensureRepoExists(parsed.owner, parsed.repo);
+
+      await AsyncStorage.setItem(STORAGE_KEYS.repo, JSON.stringify(repo));
+      setCurrentRepo(repo);
+      setRepoInput('');
+      setRepoModalVisible(false);
+
+      addLog(`✅ Repositório ativo: ${repo.full_name}`);
+    } catch (error) {
+      addLog(`❌ Falha ao definir repo: ${error.message}`);
+      Alert.alert('Erro', error.message);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function commitSingleFile(owner, repo, path, code) {
+    let sha;
+
+    try {
+      const { data } = await octokit.repos.getContent({
+        owner,
+        repo,
+        path
+      });
+
+      if (!Array.isArray(data) && data?.sha) {
+        sha = data.sha;
+      }
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    await octokit.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path,
+      message: `chore(auto-builder): update ${path}`,
+      content: Base64.encode(code),
+      sha
+    });
+  }
+
+  async function handleCapture() {
+    if (!isAuthenticated) {
+      setTokenModalVisible(true);
+      return;
+    }
+
+    if (!currentRepo) {
+      setRepoModalVisible(true);
+      return;
+    }
+
+    try {
+      setIsBusy(true);
+      addLog('📋 A ler área de transferência...');
+
+      const text = await Clipboard.getStringAsync();
+      if (!text || !text.trim()) {
+        throw new Error('Área de transferência vazia');
+      }
+
+      const entries = PathValidator.extractFileEntries(text);
+
+      if (!entries.length) {
+        throw new Error('Nenhum bloco // FILE: válido foi encontrado');
+      }
+
+      const invalidEntries = entries.filter((entry) => !entry.isValid);
+      if (invalidEntries.length) {
+        const message = invalidEntries
+          .map((entry) => `${entry.rawPath} -> ${entry.errors.join(', ')}`)
+          .join('\n');
+
+        addLog(`❌ Paths inválidos: ${message}`);
+        Alert.alert('Paths inválidos', message);
+        return;
+      }
+
+      addLog(`🧠 ${entries.length} ficheiro(s) detetado(s) para commit`);
+
+      const owner = currentRepo.owner.login;
+      const repo = currentRepo.name;
+
+      for (const entry of entries) {
+        addLog(`⬆️ Commitando ${entry.path}...`);
+        await commitSingleFile(owner, repo, entry.path, entry.code);
+        stateManager.registerPath(entry.path, entry.code);
+        addLog(`✅ ${entry.path} enviado`);
+      }
+
+      Alert.alert('Sucesso', `${entries.length} ficheiro(s) enviados para ${currentRepo.full_name}`);
+      addLog(`🎉 Operação concluída em ${currentRepo.full_name}`);
+    } catch (error) {
+      addLog(`❌ ${error.message}`);
+      Alert.alert('Erro', error.message);
+    } finally {
+      setIsBusy(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.title}>GitHub Auto-Builder</Text>
-          {githubUser && (
-            <Text style={styles.userInfo}>@{githubUser.login}</Text>
+          <Text style={styles.title}>GitHub Auto Builder</Text>
+          <Text style={styles.subtitle}>
+            {githubUser ? `Ligado como @${githubUser.login}` : 'Sem autenticação'}
+          </Text>
+          <Text style={styles.repoText}>
+            {currentRepo ? `Repo ativa: ${currentRepo.full_name}` : 'Repo ativa: nenhuma'}
+          </Text>
+        </View>
+
+        <View style={styles.headerButtons}>
+          {isAuthenticated ? (
+            <TouchableOpacity style={styles.secondaryButton} onPress={handleLogout}>
+              <Text style={styles.secondaryButtonText}>Sair</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.primaryButton} onPress={() => setTokenModalVisible(true)}>
+              <Text style={styles.primaryButtonText}>Token</Text>
+            </TouchableOpacity>
           )}
         </View>
-        {isAuthenticated ? (
-          <Button title="Sair" onPress={handleLogout} color="#ff4444" />
-        ) : (
-          <Button title="Login" onPress={handleAuth} />
-        )}
       </View>
 
-      {/* Repo Info */}
-      {currentRepo && (
-        <View style={styles.repoInfo}>
-          <Text style={styles.repoName}>📁 {currentRepo.name}</Text>
-          <Text style={styles.repoUrl}>{currentRepo.html_url}</Text>
-        </View>
-      )}
+      <View style={styles.actionRow}>
+        <TouchableOpacity
+          style={styles.actionButton}
+          onPress={() => setTokenModalVisible(true)}
+          disabled={isBusy}
+        >
+          <Text style={styles.actionButtonText}>Configurar token</Text>
+        </TouchableOpacity>
 
-      {/* Logs */}
-      <ScrollView style={styles.logContainer}>
-        {logs.map((log) => (
-          <Text key={log.id} style={styles.logEntry}>
-            [{log.timestamp}] {log.text}
-          </Text>
-        ))}
+        <TouchableOpacity
+          style={styles.actionButton}
+          onPress={() => setRepoModalVisible(true)}
+          disabled={isBusy || !isAuthenticated}
+        >
+          <Text style={styles.actionButtonText}>Definir repo</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.helpCard}>
+        <Text style={styles.helpTitle}>Formato esperado</Text>
+        <Text style={styles.helpText}>
+          // FILE: src/components/Button.js
+        </Text>
+        <Text style={styles.helpText}>
+          ```js
+        </Text>
+        <Text style={styles.helpText}>
+          export default function Button() {'{'} return null; {'}'}
+        </Text>
+        <Text style={styles.helpText}>
+          ```
+        </Text>
+      </View>
+
+      <ScrollView style={styles.logPanel} contentContainerStyle={styles.logPanelContent}>
+        {logs.length === 0 ? (
+          <Text style={styles.emptyLogs}>Sem logs ainda.</Text>
+        ) : (
+          logs.map((log) => (
+            <View key={log.id} style={styles.logItem}>
+              <Text style={styles.logTimestamp}>[{log.timestamp}]</Text>
+              <Text style={styles.logMessage}>{log.message}</Text>
+            </View>
+          ))
+        )}
       </ScrollView>
 
-      {/* Modal para confirmações */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>
-              {pendingOperation?.type === 'new_repo' 
-                ? '📁 Criar Novo Repositório' 
-                : '⚠️ Corrigir Paths'}
-            </Text>
-            
-            {pendingOperation?.type === 'validation_errors' && (
-              <>
-                <Text style={styles.modalSubtitle}>Paths com problemas:</Text>
-                {pendingOperation.paths
-                  .filter(p => !p.isValid || p.warnings.length > 0)
-                  .map((p, idx) => (
-                    <View key={idx} style={styles.pathIssue}>
-                      <Text style={styles.pathText}>{p.path}</Text>
-                      {p.errors.map((err, i) => (
-                        <Text key={i} style={styles.errorText}>❌ {err}</Text>
-                      ))}
-                      {p.warnings.map((warn, i) => (
-                        <Text key={i} style={styles.warningText}>⚠️ {warn}</Text>
-                      ))}
-                    </View>
-                  ))}
-              </>
-            )}
+      <FloatingButton onPress={handleCapture} loading={isBusy} disabled={false} />
 
-            {pendingOperation?.type === 'new_repo' && (
-              <>
-                <Text style={styles.modalText}>
-                  Nenhum repositório selecionado. Deseja criar um novo?
-                </Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Nome do repositório"
-                  autoCapitalize="none"
-                  onChangeText={(text) => setPendingOperation({
-                    ...pendingOperation,
-                    repoName: text
-                  })}
-                />
-              </>
-            )}
+      <Modal visible={tokenModalVisible} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Token GitHub</Text>
+            <Text style={styles.modalText}>
+              Cola aqui um Personal Access Token com permissões de repositório.
+            </Text>
+
+            <TextInput
+              value={tokenInput}
+              onChangeText={setTokenInput}
+              style={styles.input}
+              placeholder="ghp_..."
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={[styles.button, styles.buttonCancel]}
-                onPress={() => setModalVisible(false)}
+                style={styles.secondaryButton}
+                onPress={() => setTokenModalVisible(false)}
               >
-                <Text style={styles.buttonText}>Cancelar</Text>
+                <Text style={styles.secondaryButtonText}>Cancelar</Text>
               </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.button, styles.buttonConfirm]}
-                onPress={async () => {
-                  setModalVisible(false);
-                  
-                  if (pendingOperation?.type === 'new_repo' && pendingOperation.repoName) {
-                    try {
-                      const newRepo = await createNewRepo(pendingOperation.repoName);
-                      await commitFiles(
-                        pendingOperation.codeBlocks, 
-                        pendingOperation.paths,
-                        newRepo
-                      );
-                    } catch (error) {
-                      Alert.alert('Erro', error.message);
-                    }
-                  } else {
-                    // Prosseguir mesmo com avisos
-                    await commitFiles(
-                      pendingOperation?.codeBlocks,
-                      pendingOperation?.paths
-                    );
-                  }
-                }}
-              >
-                <Text style={styles.buttonText}>Confirmar</Text>
+
+              <TouchableOpacity style={styles.primaryButton} onPress={handleSaveToken}>
+                <Text style={styles.primaryButtonText}>Guardar</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Botão Flutuante */}
-      <FloatingButton 
-        onPress={handleCapture} 
-        disabled={!isAuthenticated || isCapturing}
-        loading={isCapturing}
-      />
+      <Modal visible={repoModalVisible} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Repositório alvo</Text>
+            <Text style={styles.modalText}>
+              Usa "nome-da-repo", "owner/repo" ou cola a URL do GitHub.
+            </Text>
+
+            <TextInput
+              value={repoInput}
+              onChangeText={setRepoInput}
+              style={styles.input}
+              placeholder="AndreVazao/minha-repo"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <TouchableOpacity
+              style={styles.checkboxRow}
+              onPress={() => setCreateRepoIfMissing((prev) => !prev)}
+            >
+              <View style={[styles.checkbox, createRepoIfMissing && styles.checkboxChecked]} />
+              <Text style={styles.checkboxText}>Criar repo automaticamente se não existir</Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => setRepoModalVisible(false)}
+              >
+                <Text style={styles.secondaryButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.primaryButton} onPress={handleSaveRepo}>
+                <Text style={styles.primaryButtonText}>Guardar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -500,130 +455,183 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#0f172a'
   },
   header: {
-    padding: 20,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#ddd',
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start'
   },
   title: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: '800'
   },
-  userInfo: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
+  subtitle: {
+    color: '#cbd5e1',
+    marginTop: 4,
+    fontSize: 13
   },
-  repoInfo: {
-    padding: 10,
-    backgroundColor: '#e3f2fd',
-    borderBottomWidth: 1,
-    borderBottomColor: '#b8dff0',
+  repoText: {
+    color: '#93c5fd',
+    marginTop: 6,
+    fontSize: 13
   },
-  repoName: {
-    fontSize: 14,
-    fontWeight: 'bold',
+  headerButtons: {
+    marginLeft: 12
   },
-  repoUrl: {
-    fontSize: 12,
-    color: '#1976d2',
+  primaryButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10
   },
-  logContainer: {
-    flex: 1,
-    padding: 10,
-    backgroundColor: '#fff',
-    margin: 10,
-    borderRadius: 10,
+  primaryButtonText: {
+    color: '#ffffff',
+    fontWeight: '700'
+  },
+  secondaryButton: {
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#334155'
   },
-  logEntry: {
-    fontSize: 11,
-    marginBottom: 3,
-    color: '#333',
-    fontFamily: 'monospace',
+  secondaryButtonText: {
+    color: '#e2e8f0',
+    fontWeight: '700'
   },
-  modalContainer: {
+  actionRow: {
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    gap: 10
+  },
+  actionButton: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14
   },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
-    width: '90%',
-    maxHeight: '80%',
+  actionButtonText: {
+    color: '#f8fafc',
+    fontWeight: '700',
+    textAlign: 'center'
+  },
+  helpCard: {
+    marginHorizontal: 18,
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1f2937'
+  },
+  helpTitle: {
+    color: '#ffffff',
+    fontWeight: '800',
+    marginBottom: 8
+  },
+  helpText: {
+    color: '#cbd5e1',
+    fontFamily: 'monospace'
+  },
+  logPanel: {
+    flex: 1,
+    marginTop: 14
+  },
+  logPanelContent: {
+    paddingHorizontal: 18,
+    paddingBottom: 120
+  },
+  emptyLogs: {
+    color: '#94a3b8',
+    fontSize: 14,
+    marginTop: 12
+  },
+  logItem: {
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10
+  },
+  logTimestamp: {
+    color: '#93c5fd',
+    fontSize: 12,
+    marginBottom: 4
+  },
+  logMessage: {
+    color: '#e5e7eb',
+    fontSize: 14,
+    lineHeight: 20
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.75)',
+    justifyContent: 'center',
+    padding: 18
+  },
+  modalCard: {
+    backgroundColor: '#0f172a',
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#1f2937'
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
-  },
-  modalSubtitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 10,
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 8
   },
   modalText: {
-    fontSize: 14,
-    marginBottom: 15,
-  },
-  pathIssue: {
-    marginBottom: 15,
-    padding: 10,
-    backgroundColor: '#f8f8f8',
-    borderRadius: 8,
-  },
-  pathText: {
-    fontSize: 13,
-    fontWeight: '500',
-    marginBottom: 5,
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#ff4444',
-    marginLeft: 10,
-  },
-  warningText: {
-    fontSize: 12,
-    color: '#ff8800',
-    marginLeft: 10,
+    color: '#cbd5e1',
+    marginBottom: 14,
+    lineHeight: 20
   },
   input: {
+    backgroundColor: '#111827',
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 20,
+    borderColor: '#334155',
+    color: '#ffffff',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14
   },
   modalButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'flex-end',
+    gap: 10
   },
-  button: {
-    padding: 12,
-    borderRadius: 8,
-    minWidth: 120,
+  checkboxRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 14
   },
-  buttonCancel: {
-    backgroundColor: '#ff4444',
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#64748b',
+    marginRight: 10,
+    backgroundColor: '#111827'
   },
-  buttonConfirm: {
-    backgroundColor: '#4CAF50',
+  checkboxChecked: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb'
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  checkboxText: {
+    color: '#e2e8f0',
+    flex: 1
+  }
 });
