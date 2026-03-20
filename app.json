@@ -5,21 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourname.githubautobuilder"
-      },
-      "package": "com.yourname.githubautobuilder",
-      "permissions": [
-        "SYSTEM_ALERT_WINDOW"
-      ]
+      "bundleIdentifier": "com.githubautobuilder.app"
+    },
+    "android": {
+      "package": "com.githubautobuilder.app",
+      "permissions": ["SYSTEM_ALERT_WINDOW"]
     }
+  }
 }
