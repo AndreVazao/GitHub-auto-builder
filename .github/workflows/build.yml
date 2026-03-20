@@ -31,6 +31,10 @@ jobs:
           eas-version: 'latest'
           token: ${{ secrets.EXPO_TOKEN }}
 
+      - name: Create .nvmrc
+        run: |
+          echo "20" > .nvmrc
+
       - name: Create eas.json
         run: |
           cat > eas.json << 'EOF'
@@ -53,6 +57,12 @@ jobs:
         run: |
           mkdir -p assets
           echo "placeholder" > assets/.gitkeep
+
+      - name: Initialize EAS project
+        run: |
+          eas init --id $(uuidgen) --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Build Android APK
         run: eas build -p android --profile preview --non-interactive --local
