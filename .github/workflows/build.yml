@@ -19,13 +19,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
+      - name: Install dependencies (without lock file)
         run: |
-          npm ci --legacy-peer-deps
-          # O --legacy-peer-deps ajuda a resolver conflitos de dependências
+          npm install --legacy-peer-deps
+          # Isso cria o package-lock.json automaticamente
 
       - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
@@ -36,7 +34,7 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: Create eas.json (se não existir)
+      - name: Create eas.json if not exists
         run: |
           if [ ! -f eas.json ]; then
             echo '{
@@ -65,7 +63,12 @@ jobs:
         id: find-apk
         run: |
           APK_PATH=$(find . -name "*.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found!"
+            exit 1
+          fi
           echo "apk-path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK_PATH"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
