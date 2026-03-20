@@ -25,20 +25,11 @@
       },
       "package": "com.yourname.githubautobuilder",
       "permissions": [
-        "SYSTEM_ALERT_WINDOW",
-        "BIND_ACCESSIBILITY_SERVICE"
+        "SYSTEM_ALERT_WINDOW"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    },
-    "plugins": [
-      "expo-build-properties"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "SEU_PROJECT_ID"
-      }
     }
   }
 }
