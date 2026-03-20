@@ -16,19 +16,10 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yourname.githubautobuilder"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
       },
       "package": "com.yourname.githubautobuilder",
       "permissions": [
         "SYSTEM_ALERT_WINDOW"
       ]
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
     }
-  }
 }
