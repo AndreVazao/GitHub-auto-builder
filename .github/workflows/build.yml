@@ -1,89 +1,41 @@
-name: Build Android APK
+name: EAS Build Android APK
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
+    name: Install and trigger Android build
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: 20
+          cache: npm
 
-      - name: Install dependencies
-        run: |
-          npm install --legacy-peer-deps --no-package-lock
-
-      - name: Setup Expo
+      - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
         with:
-          expo-version: 'latest'
-          eas-version: 'latest'
+          eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Create .nvmrc
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Verify Expo project config
         run: |
-          echo "20" > .nvmrc
+          test -f package.json
+          test -f app.json
+          test -f eas.json
 
-      - name: Create eas.json
-        run: |
-          cat > eas.json << 'EOF'
-          {
-            "cli": {
-              "version": ">= 3.0.0",
-              "appVersionSource": "remote"
-            },
-            "build": {
-              "preview": {
-                "android": {
-                  "buildType": "apk"
-                }
-              }
-            }
-          }
-          EOF
-
-      - name: Create assets folder
-        run: |
-          mkdir -p assets
-          echo "placeholder" > assets/.gitkeep
-
-      - name: Initialize EAS project
-        run: |
-          eas init --id $(uuidgen) --non-interactive
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Build Android APK
-        run: eas build -p android --profile preview --non-interactive --local
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Find and upload APK
-        id: find-apk
-        run: |
-          APK_PATH=$(find . -name "*.apk" | head -1)
-          if [ -z "$APK_PATH" ]; then
-            echo "No APK found!"
-            exit 1
-          fi
-          echo "apk-path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "Found APK: $APK_PATH"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: github-auto-builder-app
-          path: ${{ steps.find-apk.outputs.apk-path }}
-          if-no-files-found: error
-          retention-days: 90
+      - name: Trigger Android build on EAS
+        run: npx eas-cli build --platform android --profile preview --non-interactive --no-wait
