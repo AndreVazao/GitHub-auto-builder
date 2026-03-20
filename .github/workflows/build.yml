@@ -18,12 +18,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'  # Mudado de 18 para 20
-          cache: 'npm'
+          node-version: '20'
+          # REMOVENDO O CACHE para evitar erro de lock file
 
       - name: Install dependencies
         run: |
-          npm install --legacy-peer-deps
+          npm install --legacy-peer-deps --no-package-lock
+          # --no-package-lock evita criar o arquivo lock
 
       - name: Setup Expo
         uses: expo/expo-github-action@v8
@@ -37,17 +38,24 @@ jobs:
           cat > eas.json << 'EOF'
           {
             "cli": {
-              "version": ">= 3.0.0"
+              "version": ">= 3.0.0",
+              "appVersionSource": "remote"
             },
             "build": {
               "preview": {
                 "android": {
                   "buildType": "apk"
-                }
+                },
+                "node": "20"
               }
             }
           }
           EOF
+
+      - name: Create assets folder
+        run: |
+          mkdir -p assets
+          echo "placeholder" > assets/.gitkeep
 
       - name: Build Android APK
         run: eas build -p android --profile preview --non-interactive --local
