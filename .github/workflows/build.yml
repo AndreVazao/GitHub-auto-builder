@@ -20,10 +20,9 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Setup Expo / EAS
         uses: expo/expo-github-action@v8
