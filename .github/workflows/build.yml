@@ -18,48 +18,43 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'  # Mudado de 18 para 20
+          cache: 'npm'
 
-      - name: Install dependencies (without lock file)
+      - name: Install dependencies
         run: |
           npm install --legacy-peer-deps
-          # Isso cria o package-lock.json automaticamente
 
-      - name: Setup Expo and EAS
+      - name: Setup Expo
         uses: expo/expo-github-action@v8
         with:
-          eas-version: latest
+          expo-version: 'latest'
+          eas-version: 'latest'
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Install EAS CLI
-        run: npm install -g eas-cli
-
-      - name: Create eas.json if not exists
+      - name: Create eas.json
         run: |
-          if [ ! -f eas.json ]; then
-            echo '{
-              "cli": {
-                "version": ">= 3.0.0"
-              },
-              "build": {
-                "preview": {
-                  "android": {
-                    "buildType": "apk"
-                  }
+          cat > eas.json << 'EOF'
+          {
+            "cli": {
+              "version": ">= 3.0.0"
+            },
+            "build": {
+              "preview": {
+                "android": {
+                  "buildType": "apk"
                 }
-              },
-              "submit": {
-                "production": {}
               }
-            }' > eas.json
-          fi
+            }
+          }
+          EOF
 
       - name: Build Android APK
         run: eas build -p android --profile preview --non-interactive --local
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Find APK file
+      - name: Find and upload APK
         id: find-apk
         run: |
           APK_PATH=$(find . -name "*.apk" | head -1)
