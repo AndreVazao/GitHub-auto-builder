@@ -36,5 +36,8 @@ jobs:
           test -f app.json
           test -f eas.json
 
+      - name: Show Expo config
+        run: npx expo config --json
+
       - name: Trigger Android build
         run: npx eas-cli build --platform android --profile preview --non-interactive --no-wait
