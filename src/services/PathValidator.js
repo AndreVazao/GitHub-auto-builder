@@ -1,94 +1,119 @@
 export class PathValidator {
-  
-  static PROJECT_PATTERNS = {
-    generic: {
-      validExtensions: ['.js', '.jsx', '.ts', '.tsx', '.py', '.json', '.html', '.css', '.md'],
-      forbiddenChars: /[<>:"|?*\x00-\x1F]/g,
-      maxDepth: 5
-    }
-  };
+  static VALID_EXTENSIONS = new Set([
+    '.js',
+    '.jsx',
+    '.ts',
+    '.tsx',
+    '.json',
+    '.md',
+    '.css',
+    '.scss',
+    '.html',
+    '.py',
+    '.java',
+    '.kt',
+    '.xml',
+    '.yml',
+    '.yaml',
+    '.txt'
+  ]);
 
-  static extractPathsFromText(text) {
-    const paths = [];
-    const fileRegex = /\/\/\s*FILE:\s*([^\n]+)/g;
-    
-    let match;
-    while ((match = fileRegex.exec(text)) !== null) {
-      const fullPath = match[1].trim();
-      const lastSlash = fullPath.lastIndexOf('/');
-      
-      paths.push({
-        fullPath: this.sanitizePath(fullPath),
-        directory: lastSlash > 0 ? fullPath.substring(0, lastSlash) : '',
-        fileName: lastSlash > 0 ? fullPath.substring(lastSlash + 1) : fullPath,
-        extension: fullPath.includes('.') ? '.' + fullPath.split('.').pop() : ''
-      });
-    }
-    
-    return paths;
+  static FORBIDDEN_CHARS = /[<>:"|?*\x00-\x1F]/g;
+
+  static normalizePath(input) {
+    return String(input || '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/\/+$/, '');
   }
 
-  static extractCodeBlocks(text) {
-    const blocks = [];
-    const codeBlockRegex = /```(?:\w*)\n([\s\S]*?)```/g;
-    
-    let match;
-    while ((match = codeBlockRegex.exec(text)) !== null) {
-      blocks.push({
-        code: match[1].trim(),
-        language: this.detectLanguage(match[0])
-      });
-    }
-    
-    return blocks;
-  }
-
-  static detectLanguage(codeBlock) {
-    const firstLine = codeBlock.split('\n')[0];
-    if (firstLine.includes('javascript') || firstLine.includes('js')) return 'javascript';
-    if (firstLine.includes('python') || firstLine.includes('py')) return 'python';
-    if (firstLine.includes('html')) return 'html';
-    if (firstLine.includes('css')) return 'css';
-    if (firstLine.includes('json')) return 'json';
-    return 'unknown';
-  }
-
-  static validatePathSyntax(filePath, projectType = 'generic') {
+  static validatePathSyntax(filePath) {
     const errors = [];
     const warnings = [];
+    const sanitizedPath = this.normalizePath(filePath);
 
-    if (!filePath || filePath.trim() === '') {
+    if (!sanitizedPath) {
       errors.push('Path vazio');
-      return { isValid: false, errors, warnings };
+      return { isValid: false, errors, warnings, sanitizedPath };
     }
 
-    if (this.PROJECT_PATTERNS[projectType].forbiddenChars.test(filePath)) {
-      errors.push('Caracteres proibidos');
+    if (sanitizedPath.includes('..')) {
+      errors.push('Path não pode conter ".."');
     }
 
-    const ext = filePath.includes('.') ? '.' + filePath.split('.').pop() : '';
-    if (ext && !this.PROJECT_PATTERNS[projectType].validExtensions.includes(ext)) {
-      warnings.push(`Extensão ${ext} não comum`);
+    if (this.FORBIDDEN_CHARS.test(sanitizedPath)) {
+      errors.push('Path contém caracteres proibidos');
     }
 
-    const depth = filePath.split('/').length;
-    if (depth > this.PROJECT_PATTERNS[projectType].maxDepth) {
-      warnings.push(`Path muito profundo (${depth} níveis)`);
+    const segments = sanitizedPath.split('/').filter(Boolean);
+    if (segments.length > 8) {
+      warnings.push(`Path profundo (${segments.length} níveis)`);
+    }
+
+    const fileName = segments[segments.length - 1] || '';
+    if (!fileName.includes('.')) {
+      warnings.push('Arquivo sem extensão');
+    } else {
+      const extension = '.' + fileName.split('.').pop().toLowerCase();
+      if (!this.VALID_EXTENSIONS.has(extension)) {
+        warnings.push(`Extensão incomum: ${extension}`);
+      }
     }
 
     return {
       isValid: errors.length === 0,
       errors,
       warnings,
-      sanitizedPath: this.sanitizePath(filePath)
+      sanitizedPath
     };
   }
 
-  static sanitizePath(filePath) {
-    return filePath
-      .trim()
-      .replace(/\\/g, '/')
-      .replace(/\/+/g, '/')
-      .replace(/^\/+|\/+$/g, '');
+  static extractFileEntries(text) {
+    const source = String(text || '');
+    const markerRegex = /\/\/\s*FILE:\s*([^\n\r]+)/g;
+    const markers = [];
+
+    let match;
+    while ((match = markerRegex.exec(source)) !== null) {
+      markers.push({
+        fullMatch: match[0],
+        rawPath: match[1].trim(),
+        start: match.index,
+        afterMarkerIndex: markerRegex.lastIndex
+      });
+    }
+
+    if (!markers.length) {
+      return [];
+    }
+
+    const entries = [];
+
+    for (let i = 0; i < markers.length; i += 1) {
+      const current = markers[i];
+      const next = markers[i + 1];
+      const chunk = source.slice(
+        current.afterMarkerIndex,
+        next ? next.start : source.length
+      );
+
+      const fencedCodeMatch = chunk.match(/```[a-zA-Z0-9_-]*\n([\s\S]*?)```/);
+      const code = fencedCodeMatch ? fencedCodeMatch[1].trim() : chunk.trim();
+
+      const validation = this.validatePathSyntax(current.rawPath);
+
+      entries.push({
+        path: validation.sanitizedPath,
+        rawPath: current.rawPath,
+        code,
+        isValid: validation.isValid,
+        errors: validation.errors,
+        warnings: validation.warnings
+      });
+    }
+
+    return entries.filter((entry) => entry.code && entry.path);
   }
-        }
+      }
