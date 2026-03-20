@@ -19,12 +19,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # REMOVENDO O CACHE para evitar erro de lock file
 
       - name: Install dependencies
         run: |
           npm install --legacy-peer-deps --no-package-lock
-          # --no-package-lock evita criar o arquivo lock
 
       - name: Setup Expo
         uses: expo/expo-github-action@v8
@@ -45,8 +43,7 @@ jobs:
               "preview": {
                 "android": {
                   "buildType": "apk"
-                },
-                "node": "20"
+                }
               }
             }
           }
