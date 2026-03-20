@@ -1,34 +1,38 @@
 export class ProjectStateManager {
   constructor() {
     this.fileTree = new Map();
-    this.pendingOperations = [];
   }
 
   registerPath(filePath, content) {
-    if (!this.fileTree.has(filePath)) {
+    const now = new Date().toISOString();
+    const current = this.fileTree.get(filePath);
+
+    if (!current) {
       this.fileTree.set(filePath, {
-        firstSeen: new Date(),
-        lastSeen: new Date(),
-        versions: [{
-          content: content.substring(0, 100) + '...', // Preview
-          timestamp: new Date()
-        }]
+        firstSeenAt: now,
+        lastSeenAt: now,
+        versions: [
+          {
+            createdAt: now,
+            preview: String(content || '').slice(0, 120)
+          }
+        ]
       });
-    } else {
-      const info = this.fileTree.get(filePath);
-      info.lastSeen = new Date();
-      info.versions.push({
-        content: content.substring(0, 100) + '...',
-        timestamp: new Date()
-      });
+      return;
     }
+
+    current.lastSeenAt = now;
+    current.versions.push({
+      createdAt: now,
+      preview: String(content || '').slice(0, 120)
+    });
   }
 
   getFileInfo(filePath) {
-    return this.fileTree.get(filePath);
+    return this.fileTree.get(filePath) || null;
   }
 
   getAllPaths() {
-    return Array.from(this.fileTree.keys());
+    return Array.from(this.fileTree.keys()).sort();
   }
-}
+      }
