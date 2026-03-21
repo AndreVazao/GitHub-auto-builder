@@ -15,6 +15,10 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.githubautobuilder.app"
     },
+    "splash": {
+      "backgroundColor": "#0f172a",
+      "resizeMode": "contain"
+    },
     "extra": {
       "eas": {
         "projectId": "c7cecd14-9f6d-4b58-847a-de66944045bf"
