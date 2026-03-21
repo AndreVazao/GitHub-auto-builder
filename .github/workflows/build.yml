@@ -38,6 +38,10 @@ jobs:
 
       - name: Show Expo config
         run: npx expo config --json
+        env:
+          NODE_ENV: production
 
       - name: Trigger Android build
         run: npx eas-cli build --platform android --profile preview --non-interactive --no-wait
+        env:
+          NODE_ENV: production
