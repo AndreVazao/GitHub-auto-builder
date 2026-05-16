@@ -16,6 +16,7 @@ GitHub-auto-builder/
 ├─ App.js
 ├─ app.json
 ├─ eas.json
+├─ Github_Auto_Builder_TREE.txt
 ├─ index.js
 ├─ package.json
 └─ README.md
