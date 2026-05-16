@@ -1,0 +1,21 @@
+GitHub-auto-builder/
+├─ .github/
+│  └─ workflows/
+│     └─ build.yml
+├─ assets/
+│  └─ .gitkeep
+├─ src/
+│  ├─ components/
+│  │  └─ FloatingButton.js
+│  └─ services/
+│     ├─ PathValidator.js
+│     └─ ProjectStateManager.js
+├─ .gitignore
+├─ .npmrc
+├─ .nvmrc
+├─ App.js
+├─ app.json
+├─ eas.json
+├─ index.js
+├─ package.json
+└─ README.md
